@@ -34,7 +34,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
-#include "bit_array.h"
+#include "bit_array_imp.h"
 #include "emalloc.h"
 
 #define NUM_OF_BYTES(nbits) (ROUND_TO((nbits), 8) >> 3)
@@ -42,12 +42,6 @@
 #define SET_BIT(A, p)       ((A)[((p)/8)] |= ((uint8_t)(1 << ((p)%8))))
 #define CLEAR_BIT(A, p)     ((A)[((p)/8)] &= (uint8_t)(~(1 << ((p)%8))))
 #define FLIP_BIT(A, p)      ((A)[((p)/8)] ^= (uint8_t)(1 << ((p)%8)))
-
-struct bit_array_ {
-    size_t n_bytes;
-    size_t n_bits;
-    uint8_t *data;
-};
 
 // Create a new bit array to track the status of 'num' of bits.
 // The contents of the data is uninitialized.

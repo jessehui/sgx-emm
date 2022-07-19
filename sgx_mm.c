@@ -41,13 +41,11 @@ extern ema_root_t g_user_ema_root;
 extern ema_root_t g_rts_ema_root;
 #define  LEGAL_ALLOC_PAGE_TYPE (SGX_EMA_PAGE_TYPE_REG | SGX_EMA_PAGE_TYPE_SS_FIRST | SGX_EMA_PAGE_TYPE_SS_REST)
 sgx_mm_mutex *mm_lock = NULL;
-size_t mm_user_base = 0;
-size_t mm_user_end = 0;
 //!FIXME: assume user and system EMAs are not interleaved
 // user EMAs are above the last system EMA
 int mm_alloc_internal(void *addr, size_t size, int flags,
                  sgx_enclave_fault_handler_t handler,
-                 void *private, void **out_addr, ema_root_t* root)
+                 void *priv, void **out_addr, ema_root_t* root)
 {
     int status = -1;
     size_t tmp_addr = 0;
@@ -82,41 +80,35 @@ int mm_alloc_internal(void *addr, size_t size, int flags,
     if(sgx_mm_mutex_lock(mm_lock))
         return EFAULT;
 
+#if 0
     if (mm_user_base == 0){
         //the rts is not initialized
         status = EFAULT;
         goto unlock;
     }
+#endif
 
     uint64_t si_flags = (uint64_t)SGX_EMA_PROT_READ_WRITE | page_type ;
     if (alloc_flags & SGX_EMA_RESERVE)
     {
+        // FIXME: no type needed?
         si_flags = SGX_EMA_PROT_NONE;
     }
 
     if (tmp_addr) {
         bool fixed_alloc = (alloc_flags & SGX_EMA_FIXED);
-        bool in_system_but_not_allowed = false;
         size_t end = tmp_addr + size;
         size_t start = tmp_addr;
-        if(root != &g_rts_ema_root &&
-                    ema_exist_in(&g_rts_ema_root, start, size))
-        {
-            in_system_but_not_allowed = true;
-            if(fixed_alloc){
-                status = EPERM;
-                goto unlock;
-            }
-        }
         ema_t* first = NULL;
         ema_t* last = NULL;
+
         bool exist_in_root = !search_ema_range(root, start, end, &first, &last);
 
         if(exist_in_root){
             // Use the reserved space earlier
             node = ema_realloc_from_reserve_range(first, last, start, end,
                             alloc_flags, si_flags,
-                            handler, private);
+                            handler, priv);
             if (node){
                 goto alloc_action;
             }
@@ -130,13 +122,14 @@ int mm_alloc_internal(void *addr, size_t size, int flags,
             assert(!ret);
         } else {
             // No existing ema overlapping with requested range
-            // Use the address unless it is not allowed by rts
-            if(!in_system_but_not_allowed){
-                // make sure not in rts if this is user
-                ret = find_free_region_at(root,
-                                      tmp_addr, size, &next_ema);
+            ret = find_free_region_at(root, tmp_addr, size, &next_ema);
+            if(!ret && fixed_alloc){
+                // specified addr is not within the range covered by this root,
+                // and the caller insists to use this addr
+                status = EPERM;
+                goto unlock;
             }
-            //We can't use the address, fall through
+            // can't use specified addr, but can try another, fall through
         }
     }
     // At this point, ret == false means:
@@ -155,7 +148,7 @@ int mm_alloc_internal(void *addr, size_t size, int flags,
     assert(next_ema);//found where to insert
     // create and insert the node
     node = ema_new(tmp_addr, size, alloc_flags, si_flags,
-                         handler, private, next_ema);
+                         handler, priv, next_ema);
     if (!node) {
         status = ENOMEM;
         goto unlock;
@@ -181,17 +174,21 @@ unlock:
 
 int sgx_mm_alloc(void *addr, size_t size, int flags,
                  sgx_enclave_fault_handler_t handler,
-                 void *private, void **out_addr)
+                 void *priv, void **out_addr)
 {
     if (flags & SGX_EMA_SYSTEM) return EINVAL;
+
+#if 0
     if(addr)
     {
         size_t tmp = (size_t)addr;
         if (tmp >= mm_user_end || tmp < mm_user_base)
            return EPERM;
     }
+#endif
+
     return mm_alloc_internal(addr, size, flags,
-            handler, private, out_addr, &g_user_ema_root);
+            handler, priv, out_addr, &g_user_ema_root);
 }
 
 int mm_commit_internal(void *addr, size_t size, ema_root_t* root)
@@ -440,11 +437,12 @@ unlock:
     return ret;
 }
 
+void init_user_ema_root(size_t, size_t);
+
 void sgx_mm_init(size_t user_base, size_t user_end)
 {
     mm_lock = sgx_mm_mutex_create();
-    mm_user_base = user_base;
-    mm_user_end = user_end;
+    init_user_ema_root(user_base, user_end);
     sgx_mm_register_pfhandler(sgx_mm_enclave_pfhandler);
     emalloc_init();
 }

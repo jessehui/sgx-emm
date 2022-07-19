@@ -72,13 +72,13 @@ int mm_init_ema(void *addr, size_t size, int flags, int prot,
 
 extern int mm_alloc_internal(void *addr, size_t size, uint32_t flags,
                  sgx_enclave_fault_handler_t handler,
-                 void *private, void** out_addr, ema_root_t* root);
+                 void *priv, void** out_addr, ema_root_t* root);
 
 int mm_alloc(void *addr, size_t size, uint32_t flags,
                  sgx_enclave_fault_handler_t handler,
-                 void *private, void** out_addr)
+                 void *priv, void** out_addr)
 {
-    return mm_alloc_internal(addr, size, flags, handler, private,
+    return mm_alloc_internal(addr, size, flags, handler, priv,
                             out_addr, &g_rts_ema_root);
 }
 

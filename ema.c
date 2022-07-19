@@ -35,46 +35,49 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include "ema.h"
+#include "ema_imp.h"
 #include "emalloc.h"
 #include "bit_array.h"
 #include "sgx_mm.h"
 #include "sgx_mm_primitives.h"
 #include "sgx_mm_rt_abstraction.h"
+
 /* State flags */
 #define SGX_EMA_STATE_PENDING   0x8UL
 #define SGX_EMA_STATE_MODIFIED  0x10UL
 #define SGX_EMA_STATE_PR        0x20UL
 #define UNUSED(x) ((void)(x))
-struct ema_t_ {
-    size_t              start_addr;     // starting address, should be on a page boundary
-    size_t              size;           // bytes
-    uint32_t            alloc_flags;    // EMA_RESERVED, EMA_COMMIT_NOW, EMA_COMMIT_ON_DEMAND,
-                                        // OR'ed with EMA_SYSTEM, EMA_GROWSDOWN, ENA_GROWSUP
-    uint64_t            si_flags;       // one of EMA_PROT_NONE, READ, READ_WRITE, READ_EXEC, READ_WRITE_EXEC
-                                        // Or'd with one of EMA_PAGE_TYPE_REG, EMA_PAGE_TYPE_TCS, EMA_PAGE_TYPE_TRIM
-    bit_array *         eaccept_map;    // bitmap for EACCEPT status, bit 0 in eaccept_map[0] for the page at start address
-                                        // bit i in eaccept_map[j] for page at start_address+(i+j<<3)<<12
-    int                 transition;     // state to indicate whether a transition in progress, e.g page type/permission changes.
-    sgx_enclave_fault_handler_t
-                        handler;              // custom PF handler  (for EACCEPTCOPY use)
-    void*               private;        // private data for handler
-    ema_t*              next;           // next in doubly linked list
-    ema_t*              prev;           // prev in doubly linked list
-};
 
+// The head node of the list containing ema nodes belonging to the region [start, end)
 struct ema_root_ {
+    size_t start;      // start address of the region
+    size_t end;        // end address of the region
     ema_t *guard;
 };
-extern size_t mm_user_base;
-extern size_t mm_user_end;
-ema_t dummy_user_ema = {.next = &dummy_user_ema,
-                        .prev = &dummy_user_ema};
-ema_root_t g_user_ema_root = {.guard = &dummy_user_ema};
 
-ema_t dummy_rts_ema = {.next = &dummy_rts_ema,
-                       .prev = &dummy_rts_ema};
-ema_root_t g_rts_ema_root = {.guard = &dummy_rts_ema};
+ema_root_t g_user_ema_root;
+ema_root_t g_rts_ema_root;
+
+ema_t rts_ema_guard  = {.next = &rts_ema_guard, .prev = &rts_ema_guard};
+ema_t user_ema_guard = {.next = &user_ema_guard, .prev = &user_ema_guard};
+
+static void init_ema_root(ema_root_t *root, size_t start, size_t end)
+{
+    root->start = start;
+    root->end = end;
+}
+
+void init_rts_ema_root(size_t start, size_t end)
+{
+    init_ema_root(&g_rts_ema_root, start, end);
+    g_rts_ema_root.guard = &rts_ema_guard;
+}
+
+void init_user_ema_root(size_t start, size_t end)
+{
+    init_ema_root(&g_user_ema_root, start, end);
+    g_user_ema_root.guard = &user_ema_guard;
+}
 
 #ifdef TEST
 static void dump_ema_node(ema_t *node, size_t index)
@@ -152,14 +155,8 @@ uint64_t get_ema_si_flags(ema_t *node)
 sgx_enclave_fault_handler_t ema_fault_handler(ema_t* node, void** private_data)
 {
     if(private_data)
-        *private_data = node->private;
+        *private_data = node->priv;
     return node->handler;
-}
-
-
-bool is_ema_transition(ema_t *node)
-{
-    return node->transition;
 }
 
 static void ema_clone(ema_t *dst, ema_t *src)
@@ -252,9 +249,14 @@ bool ema_page_committed(ema_t *ema, size_t addr)
                 (addr - ema->start_addr) >> SGX_PAGE_SHIFT);
 }
 
+// whether where is any ema node on the root that overlaps with region [addr, addr+size)
 bool ema_exist_in(ema_root_t* root, size_t addr, size_t size)
 {
     size_t end = addr + size;
+
+    if ((end <= root->start) || (addr >= root->end))
+        return false;
+
     for (ema_t *node = root->guard->next; node != root->guard; node = node->next) {
         if (ema_overlap_range(node, addr, end)) {
             return true;
@@ -263,15 +265,12 @@ bool ema_exist_in(ema_root_t* root, size_t addr, size_t size)
     return false;
 }
 
-bool ema_exist(size_t addr, size_t size)
-{
-    return ema_exist_in(&g_rts_ema_root, addr, size) ||
-    ema_exist_in(&g_user_ema_root, addr, size);
-}
-
 // search for a node whose address range contains 'addr'
 ema_t *search_ema(ema_root_t *root, size_t addr)
 {
+    if ((addr < root->start) || (addr >= root->end))
+        return NULL;
+
     for (ema_t *node = root->guard->next; node != root->guard; node = node->next) {
         if (ema_overlap_addr(node, addr)) {
             return node;
@@ -318,6 +317,12 @@ void push_back_ema(ema_root_t *root, ema_t *node)
 int search_ema_range(ema_root_t *root, size_t start, size_t end,
                         ema_t **ema_begin, ema_t **ema_end)
 {
+    if ((start >= root->end) || (end <= root->start)) {
+        *ema_begin = NULL;
+        *ema_end = NULL;
+        return -1;
+    }
+
     ema_t *node = root->guard->next;
 
     // find the first node that has addr >= 'start'
@@ -343,6 +348,7 @@ int search_ema_range(ema_root_t *root, size_t start, size_t end,
 
     return 0;
 }
+
 //TODO?do not split bit_arrays, reuse it by keeping  ref-count
 //and start and end offsets for multiple EMAs
 int ema_split(ema_t *ema, size_t addr, bool new_lower, ema_t** ret_node)
@@ -431,79 +437,68 @@ static size_t ema_aligned_end(ema_t* ema, size_t align)
     return curr_end;
 }
 
-// Find a free space of size at least 'size' bytes, does not matter where the start is
+// Find a free space of size at least 'size' bytes on the given root, does not
+// matter where the start is
 bool find_free_region(ema_root_t *root, size_t size,
         uint64_t align, size_t *addr, ema_t **next_ema)
 {
     ema_t *ema_begin = root->guard->next;
     ema_t *ema_end = root->guard;
-    bool is_system = (root == &g_rts_ema_root);
+
+    // no ema node on the root
     if(ema_begin == ema_end){
-        size_t tmp = 0;
-        if (is_system)
-        {
-            // we need at least one node before calling this.
-            if(ema_root_empty(&g_rts_ema_root))
-                return false;//rts has to be inited at this time
-            tmp = ema_root_end(&g_rts_ema_root);
-        }else
-        {
-            tmp = mm_user_base;
+        size_t tmp = ROUND_TO(root->start, align);
+        if ((root->end - tmp) >= size) {
+            *addr = tmp;
+            *next_ema = ema_end;
+            return true;
         }
-        tmp = ROUND_TO(tmp, align);
-        if(!sgx_mm_is_within_enclave((void*)tmp, size))
-            return false;
-        *addr = tmp;
-        *next_ema = ema_end;
-        return true;
+
+        *addr = 0;
+        *next_ema = NULL;
+        return false;
     }
 
-    // iterate over the ema node within specified range
+    // iterate over the ema nodes
     ema_t *curr = ema_begin;
     ema_t *next = curr->next;
 
     while (next != ema_end) {
         size_t curr_end = ema_aligned_end(curr, align);
-        size_t free_size = next->start_addr - curr_end;
-        if (free_size >= size) {
-            *next_ema = next;
-            *addr = curr_end;
-            return true;
+        if (curr_end <= next->start_addr) {
+            size_t free_size = next->start_addr - curr_end;
+            if (free_size >= size) {
+                *next_ema = next;
+                *addr = curr_end;
+                return true;
+            }
         }
         curr = next;
         next = curr->next;
     }
 
-    // check the last ema node
-    if( sgx_mm_is_within_enclave((void*)(curr->start_addr + curr->size), size))
-    {
-        *next_ema = next;
-        *addr = ema_aligned_end(curr, align);
-        size_t end = *addr + size;
-        if( (is_system && (end <=mm_user_base || *addr > mm_user_base))
-                || (!is_system && end < mm_user_end))
-            return true;
-    }
-    // we look for space in front, but do not mix user with rts
-    size_t tmp = ema_begin->start_addr - size;
-    tmp = TRIM_TO(tmp, align);
-    if (!is_system)
-    {
-        if (mm_user_base < tmp){
-            //we found gap bigger enough
-            *addr = tmp;
-            *next_ema = ema_begin;
+    // check the region higher than last ema node
+    size_t curr_end = ema_aligned_end(curr, align);
+    if (curr_end <= root->end) {
+        size_t free_size = root->end - curr_end;
+        if (free_size >= size) {
+            *next_ema = next;
+            *addr = curr_end;
             return true;
         }
-    }else
-    {//rts
-       if (sgx_mm_is_within_enclave((void*)tmp, size))
-       {
-            *addr = tmp;
-            *next_ema = ema_begin;
-            return true;
-       }
     }
+
+    // check the region lower than the first ema node
+    size_t tmp = ROUND_TO(root->start, align);
+    if (tmp <= ema_begin->start_addr) {
+        size_t free_size = ema_begin->start_addr - tmp;
+        if (free_size >= size) {
+            *next_ema = ema_begin;
+            *addr = tmp;
+            return true;
+        }
+    }
+
     *next_ema = NULL;
     *addr = 0;
     return false;
@@ -511,7 +506,16 @@ bool find_free_region(ema_root_t *root, size_t size,
 
 bool find_free_region_at(ema_root_t *root, size_t addr, size_t size, ema_t **next_ema)
 {
-    if( !sgx_mm_is_within_enclave((void*)(addr), size)) return false;
+    if( !sgx_mm_is_within_enclave((void*)(addr), size)) {
+        *next_ema = NULL;    
+        return false;
+    }
+
+    if ((addr >= root->end) || ((addr + size) <= root->start)) {
+        *next_ema = NULL;
+        return false;
+    }
+
     ema_t *node = root->guard->next;
     while (node != root->guard) {
         if (node->start_addr >= (addr + size)) {
@@ -759,8 +763,6 @@ static int ema_can_uncommit(ema_t* first, ema_t* last,
         if ((curr->alloc_flags & (SGX_EMA_RESERVE) ))
             return EACCES;
 
-        //! TODO check transition, TRIM type
-        // Those are not needed due to global lock
         prev_end = curr->start_addr + curr->size;
         curr = curr->next;
     }
@@ -856,14 +858,11 @@ int ema_change_to_tcs(ema_t *node, size_t addr)
     if (!(prot & SGX_EMA_PROT_READ_WRITE))
         return EPERM;
 
-    if (node->transition) return EBUSY;
-
     // page need to be already committed
     size_t pos = (addr - node->start_addr) >> SGX_PAGE_SHIFT;
     if (!node->eaccept_map || !bit_array_test(node->eaccept_map, pos)) {
         return EACCES;
     }
-    node->transition = 1;
     int ret = sgx_mm_modify_ocall(addr, SGX_PAGE_SIZE, prot | type,
                         prot | SGX_EMA_PAGE_TYPE_TCS);
     if (ret != 0) {
@@ -887,9 +886,7 @@ int ema_change_to_tcs(ema_t *node, size_t addr)
                         & (uint64_t)(~SGX_EMA_PROT_MASK))
                         | SGX_EMA_PAGE_TYPE_TCS
                         | SGX_EMA_PROT_NONE;
-    tcs->transition = 0;
 fail:
-    node->transition = 0;
     return ret;
 }
 
@@ -903,7 +900,6 @@ int ema_modify_permissions(ema_t *node, size_t start, size_t end, int new_prot)
     size_t real_end = MIN(end, node->start_addr + node->size);
 
 
-    node->transition = 1;
     int ret = sgx_mm_modify_ocall(real_start, real_end - real_start,
                                     prot | type, new_prot | type);
     if (ret != 0) {
@@ -927,7 +923,6 @@ int ema_modify_permissions(ema_t *node, size_t start, size_t end, int new_prot)
 
     // all involved pages complete permission change, deal with potential
     // ema node split and  update permission state
-    node->transition = 0;
     if (real_start > node->start_addr) {
         ema_t *tmp_node = NULL;
         ret = ema_split(node, real_start, false, &tmp_node);
@@ -945,7 +940,6 @@ int ema_modify_permissions(ema_t *node, size_t start, size_t end, int new_prot)
     }
 
     // 'node' is the ema node to update permission for
-    node->transition = 1;
     node->si_flags = (node->si_flags
                         & (uint64_t) (~SGX_EMA_PROT_MASK))
                         | (uint64_t) new_prot;
@@ -957,7 +951,6 @@ int ema_modify_permissions(ema_t *node, size_t start, size_t end, int new_prot)
             ret = EFAULT;
     }
 fail:
-    node->transition = 0;
     return ret;
 }
 
@@ -975,8 +968,6 @@ static int ema_can_modify_permissions(ema_t* first, ema_t* last,
 
         if ((curr->alloc_flags & (SGX_EMA_RESERVE) ))
             return EPERM;
-
-        if (curr->transition) return EBUSY;
 
         size_t real_start = MAX(start, curr->start_addr);
         size_t real_end = MIN(end, curr->start_addr + curr->size);
