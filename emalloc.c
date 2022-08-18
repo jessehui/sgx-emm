@@ -31,6 +31,7 @@
 #include "emalloc.h"
 #include "ema.h" // SGX_PAGE_SIZE
 #include "sgx_mm.h" //sgx_mm_alloc
+#include <errno.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
@@ -428,13 +429,14 @@ static void* alloc_from_meta(size_t bsize)
     return block_to_payload(b);
 }
 
-void emalloc_init()
+int emalloc_init()
 {
     for (int i = 0; i < num_exact_list; i++)
     {
         exact_block_list[i] = NULL;
     }
-    if (add_reserve(initial_reserve_size)) abort();
+    if (add_reserve(initial_reserve_size)) return ENOMEM;
+    return 0;
 }
 
 // Single thread only.

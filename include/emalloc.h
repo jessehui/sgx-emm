@@ -37,7 +37,7 @@
 #define MIN(x, y) (((x)>(y))?(y):(x))
 #define MAX(x, y) (((x)>(y))?(x):(y))
 
-void emalloc_init();
+int emalloc_init();
 void* emalloc(size_t);
 void efree(void* ptr);
 #endif

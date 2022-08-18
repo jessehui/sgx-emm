@@ -48,8 +48,12 @@ extern "C" {
  * request with SGX_EMA_SYSTEM flag in this range and return an EINVAL error.
  * @param[in] user_start The start of the user address range, page aligned.
  * @param[in] user_end The end (exclusive) of the user address range, page aligned.
+ * @retval 0 Initialization was successful
+ * @retval ENOMEM No EPC space or RAM for internal allocations.
+ * @retval EFAULT Other failures in runtime abstraction layer API implementation,
+ *                 e.g., failure in sgx_mm_register_pfhandler, sgx_mm_mutex_create.
  */
-void sgx_mm_init(size_t user_start, size_t user_end);
+int sgx_mm_init(size_t user_start, size_t user_end);
 
 #define SGX_EMA_SYSTEM SGX_EMA_ALLOC_FLAGS(0x80UL) /* EMA reserved by system */
 /*

@@ -439,10 +439,13 @@ unlock:
 
 void init_user_ema_root(size_t, size_t);
 
-void sgx_mm_init(size_t user_base, size_t user_end)
+int sgx_mm_init(size_t user_base, size_t user_end)
 {
     mm_lock = sgx_mm_mutex_create();
+    if (!mm_lock)
+        return EFAULT;
     init_user_ema_root(user_base, user_end);
-    sgx_mm_register_pfhandler(sgx_mm_enclave_pfhandler);
-    emalloc_init();
+    if (!sgx_mm_register_pfhandler(sgx_mm_enclave_pfhandler))
+        return EFAULT;
+    return emalloc_init();
 }
