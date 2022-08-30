@@ -54,7 +54,6 @@ static uint8_t meta_reserve[META_RESERVE_SIZE];
 static size_t meta_used;
 /**
  * initial reserve size
- * TODO: make it configurable by RTS
  */
 #define initial_reserve_size 0x10000ULL
 
@@ -93,7 +92,7 @@ static const uint64_t alloc_mask = 1ULL;
 //block size align to 8 bytes
 uint64_t size_mask = ~((uint64_t)(exact_match_increment-1));
 // We don't expect many large blocks
-// !TODO: optimize if needed
+// Keep all the rest in one list
 static block_t* large_block_list = NULL;
 
 block_t* payload_to_block (void* p)
@@ -223,19 +222,22 @@ static block_t* neighbor_right(block_t* me)
     return (block_t*) end;
 }
 
-//!TODO merge with left neighbor
+// Merge with left neighbor is not implemented
 // which requires scanning or footer
+// Most blocks are of similar sizes, benefits of full merge implementation
+//  is probably not significant.
+// Keep it simple for now.
 static block_t* possibly_merge(block_t* b)
 {
     block_t* nr = neighbor_right(b);
-    if (!nr) return b;
-    if (is_alloced(nr)) return b;
-    remove_from_lists(nr);
-    b->header += block_size(nr);
+    while (nr && is_alloced(nr )){
+        remove_from_lists(nr);
+        b->header += block_size(nr);
 #ifndef NDEBUG
-    num_free_blocks--;
+        num_free_blocks--;
 #endif
-    return possibly_merge(b);
+    }
+    return b;
 }
 
 static void put_free_block(block_t* e)
@@ -286,7 +288,11 @@ static block_t* get_free_block(size_t bsize)
     block_t *tmp = large_block_list;
     block_t *best = NULL;
 
-    //find best match
+    // EMA objects are 80 bytes
+    // Bit_arrays are mostly small except for really large EMAs
+    // So number of large objects is likely small.
+    // Simply loop over the free list and find the smallest block
+    // that can meet the requested size.
     while(tmp != NULL)
     {
         if(tmp->header >= bsize)
@@ -312,9 +318,6 @@ static block_t* get_free_block(size_t bsize)
         block_t* tail = split_free_block(best, bsize);
         put_free_block (tail);
     }
-    // !TODO optimize for large allocations
-    // Note: EMA objects are 80 bytes
-    // bit_arrays are mostly small except for really large EMAs
 #ifndef NDEBUG
     num_free_blocks--;
 #endif
@@ -398,8 +401,6 @@ static int add_reserve (size_t rsize)
     // this will call back to emalloc and efree.
     // set the flag to avoid infinite loop
     adding_reserve = true;
-    //!TODO
-    //create a separate internal API to remove circular calls
     int ret = sgx_mm_alloc(NULL, chunk_size + 2*guard_size, SGX_EMA_RESERVE,
                  NULL, NULL, &base);
     if (ret)

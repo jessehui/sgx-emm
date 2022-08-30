@@ -349,15 +349,19 @@ int search_ema_range(ema_root_t *root, size_t start, size_t end,
     return 0;
 }
 
-//TODO?do not split bit_arrays, reuse it by keeping  ref-count
-//and start and end offsets for multiple EMAs
+// We just split and emalloc_free will merge unused and reuse blocks
 int ema_split(ema_t *ema, size_t addr, bool new_lower, ema_t** ret_node)
 {
-    //!FIXME: this is only needed for UT
+    // this is only needed for UT
     // in real usage in the file, addr always overlap
+#ifdef TEST
     if (!ema_overlap_addr(ema, addr) || !ret_node) {
         return EINVAL;
     }
+#else
+    assert(ema_overlap_addr(ema, addr));
+    assert(ret_node);
+#endif
 
     ema_t *new_node = (ema_t *)emalloc(sizeof(ema_t));
     if (!new_node) {
@@ -795,11 +799,11 @@ int ema_do_dealloc(ema_t *node, size_t start, size_t end)
     int alloc_flag = node->alloc_flags & SGX_EMA_ALLOC_FLAGS_MASK;
 
     if (alloc_flag & SGX_EMA_RESERVE)
-    {//!TODO need check range, only dealloc [start,end)
+    {//!FIXME need check range, only dealloc [start,end)
         ema_destroy(node);
         return 0;
     }
-    assert(node->eaccept_map);//TODO: refactor test/set bit_array
+    assert(node->eaccept_map);//!TODO: refactor test/set bit_array
     size_t real_start = MAX(start, node->start_addr);
     size_t real_end = MIN(end, node->start_addr + node->size);
     int prot = node->si_flags & SGX_EMA_PROT_MASK;

@@ -41,8 +41,7 @@ extern ema_root_t g_user_ema_root;
 extern ema_root_t g_rts_ema_root;
 #define  LEGAL_ALLOC_PAGE_TYPE (SGX_EMA_PAGE_TYPE_REG | SGX_EMA_PAGE_TYPE_SS_FIRST | SGX_EMA_PAGE_TYPE_SS_REST)
 sgx_mm_mutex *mm_lock = NULL;
-//!FIXME: assume user and system EMAs are not interleaved
-// user EMAs are above the last system EMA
+
 int mm_alloc_internal(void *addr, size_t size, int flags,
                  sgx_enclave_fault_handler_t handler,
                  void *priv, void **out_addr, ema_root_t* root)
@@ -91,7 +90,7 @@ int mm_alloc_internal(void *addr, size_t size, int flags,
     uint64_t si_flags = (uint64_t)SGX_EMA_PROT_READ_WRITE | page_type ;
     if (alloc_flags & SGX_EMA_RESERVE)
     {
-        // FIXME: no type needed?
+        // no type set for RESERVE ranges
         si_flags = SGX_EMA_PROT_NONE;
     }
 
@@ -414,7 +413,8 @@ int sgx_mm_enclave_pfhandler(const sgx_pfinfo *pfinfo)
             goto unlock;
         }
 
-        //!TODO: Check GROWSUP/GROWSDOWN flags and optimize accordingly.
+        // Currently kernel support for GROWSUP/GROWSDOWN not yet available.
+        // Add support for those flags later
         if (ema_do_commit(ema, addr, addr + SGX_PAGE_SIZE)){
             sgx_mm_mutex_unlock(mm_lock);
             abort();
