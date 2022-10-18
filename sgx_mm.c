@@ -375,8 +375,9 @@ int sgx_mm_modify_permissions(void *addr, size_t size, int prot)
     return mm_modify_permissions_internal(addr, size, prot, &g_user_ema_root);
 }
 
-int sgx_mm_enclave_pfhandler(const sgx_pfinfo *pfinfo)
+int sgx_mm_enclave_pfhandler(sgx_exception_info_t *info)
 {
+    sgx_pfinfo* pfinfo = (sgx_pfinfo*)(&info->exinfo);
     int ret = SGX_MM_EXCEPTION_CONTINUE_SEARCH;
     size_t addr = TRIM_TO((pfinfo->maddr), SGX_PAGE_SIZE);
     if(sgx_mm_mutex_lock(mm_lock)) return ret;
@@ -391,7 +392,7 @@ int sgx_mm_enclave_pfhandler(const sgx_pfinfo *pfinfo)
     if(eh){
         //don't hold the lock as handlers can longjmp
         sgx_mm_mutex_unlock(mm_lock);
-        return eh(pfinfo, data);
+        return eh(info, data);
     }
     if (ema_page_committed(ema, addr))
     {

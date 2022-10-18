@@ -33,6 +33,7 @@
 #define SGX_MM_RT_ABSTRACTION_H_
 
 #include "sgx_mm.h"
+#include "sgx_trts_exception.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -46,7 +47,7 @@ extern "C" {
  * @retval SGX_EXCEPTION_CONTINUE_EXECUTION Success handling the exception.
  * @retval SGX_EXCEPTION_CONTINUE_SEARCH The EMM does not handle the exception.
  */
-    typedef int (*sgx_mm_pfhandler_t)(const sgx_pfinfo *pfinfo);
+    typedef int (*sgx_mm_pfhandler_t)(sgx_exception_info_t *pfinfo);
 
 /*
  * Register the EMM handler with the global exception handler registry
