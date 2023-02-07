@@ -433,7 +433,7 @@ static int add_reserve(size_t rsize)
 
     sgx_mm_commit(base, rsize);
     new_reserve(base, reserve_size_increment);
-    reserve_size_increment = reserve_size_increment * 2;  // double next time
+    // reserve_size_increment = reserve_size_increment * 2;  // double next time
     if (reserve_size_increment > max_emalloc_size)
         reserve_size_increment = max_emalloc_size;
 out:
