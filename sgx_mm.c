@@ -47,6 +47,7 @@ extern ema_root_t g_rts_ema_root;
 sgx_mm_mutex* mm_lock = NULL;
 size_t mm_user_base = 0;
 size_t mm_user_end = 0;
+extern size_t get_rsrv_size();
 
 int mm_alloc_internal(void* addr, size_t size, int flags,
                       sgx_enclave_fault_handler_t handler, void* priv,
@@ -403,6 +404,15 @@ int sgx_mm_enclave_pfhandler(const sgx_pfinfo* pfinfo)
             (pfinfo->pfec.rw == 1 &&
              0 == (get_ema_si_flags(ema) & SGX_EMA_PROT_WRITE)))
         {
+            ret = SGX_MM_EXCEPTION_CONTINUE_SEARCH;
+        }
+        // This check is only for Occlum's usage. Please be aware!
+        // Occlum replaces "sgx_tprotect_rsrv_mem" with raw implementation for EDMM platforms. This removes all the VRD/EMA management logic including
+        // the lock for better performance. However, for userspace #PF triggered on-purpose, e.g. visit page with PROT_NONE,
+        // the ema permission is conflict with the actual permission and will lead to infinite loop. For Occlum, there is only one reserved
+        // memory area which is used as the entire user space. Thus, we check if the "ema" is the only reserved memory area here. And if this
+        // is the case, it will call to the exception handler registed by Occlum and everything works.
+        else if (get_ema_size(ema) == get_rsrv_size()) {
             ret = SGX_MM_EXCEPTION_CONTINUE_SEARCH;
         }
         else

@@ -141,6 +141,11 @@ uint64_t get_ema_si_flags(ema_t* node)
     return node->si_flags;
 }
 
+size_t get_ema_size(ema_t* node)
+{
+    return node->size;
+}
+
 sgx_enclave_fault_handler_t ema_fault_handler(ema_t* node, void** private_data)
 {
     if (private_data) *private_data = node->priv;

@@ -66,6 +66,7 @@ extern "C"
 
     uint32_t get_ema_alloc_flags(ema_t* node);
     uint64_t get_ema_si_flags(ema_t* node);
+    size_t get_ema_size(ema_t* node);
 
     sgx_enclave_fault_handler_t ema_fault_handler(ema_t* node,
                                                   void** private_data);
